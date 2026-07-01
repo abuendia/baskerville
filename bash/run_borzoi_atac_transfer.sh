@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASKERVILLE_DIR="${BASKERVILLE_DIR:-/mnt/scratch/ag/baskerville}"
-CONDA_SH="${CONDA_SH:-/mnt/scratch/conda/etc/profile.d/conda.sh}"
+BASKERVILLE_DIR="${BASKERVILLE_DIR:-/oak/stanford/groups/akundaje/abuen/ag/baskerville}"
+CONDA_SH="${CONDA_SH:-/users/abuen/programs/conda/etc/profile.d/conda.sh}"
 CONDA_ENV="${CONDA_ENV:-baskerville}"
 
-WORK_ROOT="${WORK_ROOT:-/mnt/scratch/ag/data/borzoi_atac_transfer}"
-FASTA="${FASTA:-/mnt/scratch/ag/data/public_data/genome/hg38.genome.fa}"
-TRUNK_ROOT="${TRUNK_ROOT:-/mnt/scratch/ag/data/borzoi/pretrain_trunks}"
+WORK_ROOT="${WORK_ROOT:-/oak/stanford/groups/akundaje/abuen/ag/outputs/borzoi_atac_transfer}"
+FASTA="${FASTA:-/oak/stanford/groups/akundaje/abuen/ag/public_data/genome/hg38.genome.fa}"
+TRUNK_ROOT="${TRUNK_ROOT:-/oak/stanford/groups/akundaje/abuen/ag/ag-data/borzoi/pretrain_trunks}"
 BORZOI_TRUNKS="${BORZOI_TRUNKS:-}"
-AG_FOLD_DIR="${AG_FOLD_DIR:-/mnt/scratch/ag/data/ag-data/ag_regions/fold_1}"
+TRUNK_GLOB="${TRUNK_GLOB:-trunk_r*.h5}"
+AG_FOLD_DIR="${AG_FOLD_DIR:-/oak/stanford/groups/akundaje/abuen/ag/ag-data/ag_regions/fold_1}"
 USE_AG_FOLD="${USE_AG_FOLD:-1}"
 
 SEQ_LENGTH="${SEQ_LENGTH:-524288}"
@@ -25,36 +26,64 @@ LIMIT_BED="${LIMIT_BED:-}"
 BLACKLIST_BED="${BLACKLIST_BED:-}"
 UMAP_BED="${UMAP_BED:-}"
 
+SAMPLES="${SAMPLES:-K562 GM12878}"
 MODES="${MODES:-full linear lora locon}"
-BATCH_SIZE="${BATCH_SIZE:-1}"
-EPOCHS_MIN="${EPOCHS_MIN:-1}"
-EPOCHS_MAX="${EPOCHS_MAX:-1}"
-WARMUP_STEPS="${WARMUP_STEPS:-500}"
+BATCH_SIZE="${BATCH_SIZE:-4}"
+EPOCHS_MIN="${EPOCHS_MIN:-10}"
+EPOCHS_MAX="${EPOCHS_MAX:-50}"
+WARMUP_STEPS="${WARMUP_STEPS:-20000}"
 SCALE="${SCALE:-1.0}"
 SKIP_TRAIN="${SKIP_TRAIN:-0}"
 FORCE="${FORCE:-0}"
 MIXED_PRECISION="${MIXED_PRECISION:-0}"
+RUN_EVAL="${RUN_EVAL:-1}"
+EVAL_OUT_ROOT="${EVAL_OUT_ROOT:-${WORK_ROOT}/eval}"
 
 export PYTHONPATH="${BASKERVILLE_DIR}/src:${PYTHONPATH:-}"
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/mnt/scratch/tmp/mplconfig}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/mnt/scratch/tmp}"
+export PATH="${BASKERVILLE_DIR}/src/baskerville/scripts:${BASKERVILLE_DIR}/src/baskerville/scripts/utils:${PATH}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/borzoi_atac_transfer_mplconfig}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/borzoi_atac_transfer_cache}"
+mkdir -p "${MPLCONFIGDIR}" "${XDG_CACHE_HOME}"
 
 source "${CONDA_SH}"
 conda activate "${CONDA_ENV}"
+
+# TensorFlow 2.15 is built for CUDA 12.2. Some cluster shells preload older
+# CUDA paths, so put the pip-installed CUDA 12 runtime libraries first.
+TF_CUDA_LIBS="$(
+  python - <<'PY'
+import glob
+import site
+
+paths = []
+for root in site.getsitepackages():
+    paths.extend(glob.glob(root + "/nvidia/*/lib"))
+print(":".join(paths))
+PY
+)"
+if [[ -n "${TF_CUDA_LIBS}" ]]; then
+  LD_FILTERED="$(
+    printf '%s' "${LD_LIBRARY_PATH:-}" \
+      | tr ':' '\n' \
+      | grep -v '/cuda/9\.0\.176' \
+      | paste -sd: - || true
+  )"
+  export LD_LIBRARY_PATH="${TF_CUDA_LIBS}:/usr/lib64/nvidia:${LD_FILTERED}"
+fi
 
 cd "${BASKERVILLE_DIR}"
 mkdir -p "${WORK_ROOT}"
 
 declare -A BIGWIGS=(
-  [K562]="/mnt/scratch/ag/data/ag-data/atac_ft/K562/K562_ATAC.bw"
-  [GM12878]="/mnt/scratch/ag/data/ag-data/atac_ft/GM12878/GM12878_ATAC.bw"
+  [K562]="/oak/stanford/groups/akundaje/abuen/ag/ag-data/atac_ft/K562/K562_ATAC.bw"
+  [GM12878]="/oak/stanford/groups/akundaje/abuen/ag/ag-data/atac_ft/GM12878/GM12878_ATAC.bw"
 )
 
 if [[ -n "${BORZOI_TRUNKS}" ]]; then
   read -r -a TRUNKS <<< "${BORZOI_TRUNKS}"
 else
   shopt -s nullglob
-  TRUNKS=("${TRUNK_ROOT}"/trunk_r*.h5)
+  TRUNKS=("${TRUNK_ROOT}"/${TRUNK_GLOB})
   shopt -u nullglob
 fi
 
@@ -75,6 +104,7 @@ fi
 run_hound_data() {
   local data_dir="$1"
   local targets_file="${data_dir}/targets.txt"
+  local hound_targets_file="${data_dir}.targets.txt"
 
   if [[ -f "${data_dir}/statistics.json" && "${FORCE}" != "1" ]]; then
     echo "TFRecords already prepared: ${data_dir}"
@@ -82,6 +112,7 @@ run_hound_data() {
   fi
 
   mkdir -p "${data_dir}"
+  cp "${targets_file}" "${hound_targets_file}"
 	  local cmd=(
 	    python src/baskerville/scripts/hound_data.py
 	    --restart
@@ -109,9 +140,55 @@ run_hound_data() {
     cmd+=(-u "${UMAP_BED}" --umap_clip 0.5)
   fi
 
-  cmd+=("${FASTA}" "${targets_file}")
+  cmd+=("${FASTA}" "${hound_targets_file}")
   echo "Creating TFRecords in ${data_dir}"
   "${cmd[@]}"
+}
+
+run_eval() {
+  local sample="$1"
+  local mode="$2"
+  local trunk_label="$3"
+  local train_data_dir="$4"
+  local params_file="$5"
+  local train_out_dir="$6"
+
+  if [[ "${RUN_EVAL}" != "1" ]]; then
+    return
+  fi
+
+  local model_file="${train_out_dir}/model_best.h5"
+  if [[ -f "${train_out_dir}/model_best.mergeW.h5" ]]; then
+    model_file="${train_out_dir}/model_best.mergeW.h5"
+  fi
+
+  if [[ ! -f "${model_file}" ]]; then
+    echo "Skipping eval: no best model found in ${train_out_dir}" >&2
+    return 1
+  fi
+
+  local eval_out="${EVAL_OUT_ROOT}/${sample}/borzoi_${mode}/${trunk_label}"
+  if [[ -f "${eval_out}_1bp/summary.json" && -f "${eval_out}_32bp/summary.json" && "${FORCE}" != "1" ]]; then
+    echo "Eval already complete: ${eval_out}"
+    return
+  fi
+
+  mkdir -p "$(dirname "${eval_out}")"
+  echo "Evaluating ${sample} ${mode} ${trunk_label} on fold_1 test split -> ${eval_out}"
+  local eval_cmd=(
+    python scripts/evaluate_borzoi_atac.py
+    --params "${params_file}"
+    --model "${model_file}"
+    --genome "${FASTA}"
+    --bigwig "${BIGWIGS[${sample}]}"
+    --test-bed "${AG_FOLD_DIR}/test.bed"
+    --output-dir "${eval_out}"
+    --batch-size "${BATCH_SIZE}"
+  )
+  if [[ "${MIXED_PRECISION}" == "1" ]]; then
+    eval_cmd+=(--mixed-precision)
+  fi
+  "${eval_cmd[@]}"
 }
 
 setup_folds() {
@@ -136,7 +213,7 @@ setup_folds() {
     "${data_dir}"
 }
 
-for sample in K562 GM12878; do
+for sample in ${SAMPLES}; do
   sample_dir="${WORK_ROOT}/${sample}"
   w5_dir="${sample_dir}/w5"
   data_dir="${sample_dir}/tfr"
@@ -146,6 +223,12 @@ for sample in K562 GM12878; do
   w5="${w5_dir}/${sample}_ATAC.w5"
 
   mkdir -p "${w5_dir}" "${data_dir}" "${params_dir}"
+
+  prep_lock="${sample_dir}/prep.lock"
+  exec {prep_lock_fd}>"${prep_lock}"
+  echo "Waiting for prep lock: ${prep_lock}"
+  flock "${prep_lock_fd}"
+  echo "Acquired prep lock: ${prep_lock}"
 
   if [[ ! -f "${w5}" || "${FORCE}" == "1" ]]; then
     echo "Converting ${bw} -> ${w5}"
@@ -179,6 +262,9 @@ for sample in K562 GM12878; do
 	    setup_folds "${sample_dir}" "${params_dir}/borzoi_linear.json" "${data_dir}"
 	  fi
 
+  flock -u "${prep_lock_fd}"
+  echo "Released prep lock: ${prep_lock}"
+
   for mode in ${MODES}; do
     params_file="${params_dir}/borzoi_${mode}.json"
     for trunk in "${TRUNKS[@]}"; do
@@ -187,6 +273,7 @@ for sample in K562 GM12878; do
 
       if [[ -f "${out_dir}/model_best.h5" && "${FORCE}" != "1" ]]; then
         echo "Skipping completed run: ${out_dir}"
+        run_eval "${sample}" "${mode}" "${trunk_label}" "${train_data_dir}" "${params_file}" "${out_dir}"
         continue
       fi
 
@@ -205,6 +292,8 @@ for sample in K562 GM12878; do
       fi
       transfer_cmd+=("${params_file}" "${train_data_dir}")
       "${transfer_cmd[@]}"
+
+      run_eval "${sample}" "${mode}" "${trunk_label}" "${train_data_dir}" "${params_file}" "${out_dir}"
     done
   done
 done
