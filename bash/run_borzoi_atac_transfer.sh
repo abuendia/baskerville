@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASKERVILLE_DIR="${BASKERVILLE_DIR:-/oak/stanford/groups/akundaje/abuen/ag/baskerville}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_ROOT="${DATA_ROOT:-${ROOT:-${1:-/oak/stanford/groups/akundaje/abuen/ag/borzoi_transfer_data}}}"
+BASKERVILLE_DIR="${BASKERVILLE_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 CONDA_SH="${CONDA_SH:-/users/abuen/programs/conda/etc/profile.d/conda.sh}"
 CONDA_ENV="${CONDA_ENV:-baskerville}"
 
-WORK_ROOT="${WORK_ROOT:-/oak/stanford/groups/akundaje/abuen/ag/outputs/borzoi_atac_transfer}"
-FASTA="${FASTA:-/oak/stanford/groups/akundaje/abuen/ag/public_data/genome/hg38.genome.fa}"
-TRUNK_ROOT="${TRUNK_ROOT:-/oak/stanford/groups/akundaje/abuen/ag/ag-data/borzoi/pretrain_trunks}"
+WORK_ROOT="${WORK_ROOT:-${DATA_ROOT}/outputs/borzoi_atac_transfer}"
+FASTA="${FASTA:-${DATA_ROOT}/genome/hg38.genome.fa}"
+TRUNK_ROOT="${TRUNK_ROOT:-${DATA_ROOT}/data/borzoi/pretrain_trunks}"
 BORZOI_TRUNKS="${BORZOI_TRUNKS:-}"
 TRUNK_GLOB="${TRUNK_GLOB:-trunk_r*.h5}"
-AG_FOLD_DIR="${AG_FOLD_DIR:-/oak/stanford/groups/akundaje/abuen/ag/ag-data/ag_regions/fold_1}"
+AG_FOLD_DIR="${AG_FOLD_DIR:-${DATA_ROOT}/data/ag_regions/fold_1}"
 USE_AG_FOLD="${USE_AG_FOLD:-1}"
 
 SEQ_LENGTH="${SEQ_LENGTH:-524288}"
@@ -75,8 +77,8 @@ cd "${BASKERVILLE_DIR}"
 mkdir -p "${WORK_ROOT}"
 
 declare -A BIGWIGS=(
-  [K562]="/oak/stanford/groups/akundaje/abuen/ag/ag-data/atac_ft/K562/K562_ATAC.bw"
-  [GM12878]="/oak/stanford/groups/akundaje/abuen/ag/ag-data/atac_ft/GM12878/GM12878_ATAC.bw"
+  [K562]="${DATA_ROOT}/data/atac_ft/K562/K562_ATAC.bw"
+  [GM12878]="${DATA_ROOT}/data/atac_ft/GM12878/GM12878_ATAC.bw"
 )
 
 if [[ -n "${BORZOI_TRUNKS}" ]]; then

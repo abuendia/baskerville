@@ -12,12 +12,13 @@
 
 set -euo pipefail
 
-ROOT="${ROOT:-/oak/stanford/groups/akundaje/abuen/ag}"
-RUNNER="${RUNNER:-${ROOT}/baskerville/bash/run_borzoi_atac_transfer.sh}"
-TRUNK_ROOT="${TRUNK_ROOT:-${ROOT}/ag-data/borzoi/pretrain_trunks}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_ROOT="${DATA_ROOT:-${ROOT:-${1:-/oak/stanford/groups/akundaje/abuen/ag/borzoi_transfer_data}}}"
+RUNNER="${RUNNER:-${SCRIPT_DIR}/run_borzoi_atac_transfer.sh}"
+TRUNK_ROOT="${TRUNK_ROOT:-${DATA_ROOT}/data/borzoi/pretrain_trunks}"
 TRUNK_GLOB="${TRUNK_GLOB:-trunk_r*.h5}"
-WORK_ROOT="${WORK_ROOT:-${ROOT}/outputs/borzoi_atac_transfer}"
-LOG_ROOT="${LOG_ROOT:-${ROOT}/outputs/slurm_logs}"
+WORK_ROOT="${WORK_ROOT:-${DATA_ROOT}/outputs/borzoi_atac_transfer}"
+LOG_ROOT="${LOG_ROOT:-${DATA_ROOT}/outputs/slurm_logs}"
 
 BATCH_SIZE="${BATCH_SIZE:-4}"
 EPOCHS_MIN="${EPOCHS_MIN:-10}"
@@ -26,7 +27,7 @@ WARMUP_STEPS="${WARMUP_STEPS:-20000}"
 PROCESSES="${PROCESSES:-8}"
 MIXED_PRECISION="${MIXED_PRECISION:-0}"
 
-samples=(K562 GM12878)
+samples=(${SAMPLES:-K562 GM12878})
 modes=(${MODES:-lora})
 
 mkdir -p "${LOG_ROOT}" "${WORK_ROOT}"
@@ -49,6 +50,25 @@ num_samples=${#samples[@]}
 num_modes=${#modes[@]}
 num_trunks=${#trunks[@]}
 total_tasks=$((num_samples * num_modes * num_trunks))
+
+if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+  array_max=$((total_tasks - 1))
+  echo "Submitting ${total_tasks} tasks as a Slurm array: 0-${array_max}"
+  echo "DATA_ROOT=${DATA_ROOT}"
+  echo "Logs: ${LOG_ROOT}"
+  exec sbatch \
+    --partition="${PARTITION:-akundaje}" \
+    --gres="${GRES:-gpu:1}" \
+    --constraint="${CONSTRAINT:-GPU_SKU:A100_SXM4}" \
+    --cpus-per-task="${CPUS_PER_TASK:-8}" \
+    --mem="${MEM:-96G}" \
+    --time="${TIME:-7-00:00:00}" \
+    --array="0-${array_max}" \
+    --output="${LOG_ROOT}/%x_%A_%a.out" \
+    --error="${LOG_ROOT}/%x_%A_%a.err" \
+    --export=ALL,DATA_ROOT="${DATA_ROOT}",RUNNER="${RUNNER}",TRUNK_ROOT="${TRUNK_ROOT}",TRUNK_GLOB="${TRUNK_GLOB}",WORK_ROOT="${WORK_ROOT}",LOG_ROOT="${LOG_ROOT}",BATCH_SIZE="${BATCH_SIZE}",EPOCHS_MIN="${EPOCHS_MIN}",EPOCHS_MAX="${EPOCHS_MAX}",WARMUP_STEPS="${WARMUP_STEPS}",PROCESSES="${PROCESSES}",MIXED_PRECISION="${MIXED_PRECISION}",SAMPLES="${SAMPLES:-K562 GM12878}",MODES="${MODES:-lora}" \
+    "${BASH_SOURCE[0]}"
+fi
 
 if (( task_id >= total_tasks )); then
   echo "Task ${task_id} is outside total_tasks=${total_tasks}; exiting."
@@ -73,6 +93,7 @@ echo "mode=${mode}"
 echo "trunk=${trunk}"
 echo "batch_size=${BATCH_SIZE}"
 
+export DATA_ROOT="${DATA_ROOT}"
 export SAMPLES="${sample}"
 export MODES="${mode}"
 export BORZOI_TRUNKS="${trunk}"
@@ -86,4 +107,4 @@ export WARMUP_STEPS="${WARMUP_STEPS}"
 export PROCESSES="${PROCESSES}"
 export MIXED_PRECISION="${MIXED_PRECISION}"
 
-bash "${RUNNER}"
+bash "${RUNNER}" "${DATA_ROOT}"

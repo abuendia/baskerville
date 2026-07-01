@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${ROOT:-/oak/stanford/groups/akundaje/abuen/ag}"
-RUNNER="${RUNNER:-${ROOT}/baskerville/bash/run_borzoi_atac_transfer.sh}"
-TRUNK_ROOT="${TRUNK_ROOT:-${ROOT}/ag-data/borzoi/pretrain_trunks}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_ROOT="${DATA_ROOT:-${ROOT:-${1:-/oak/stanford/groups/akundaje/abuen/ag/borzoi_transfer_data}}}"
+RUNNER="${RUNNER:-${SCRIPT_DIR}/run_borzoi_atac_transfer.sh}"
+TRUNK_ROOT="${TRUNK_ROOT:-${DATA_ROOT}/data/borzoi/pretrain_trunks}"
 TRUNK_GLOB="${TRUNK_GLOB:-trunk_r*.h5}"
-WORK_ROOT="${WORK_ROOT:-${ROOT}/outputs/borzoi_atac_transfer}"
-LOG_ROOT="${LOG_ROOT:-${ROOT}/outputs/local_queue_logs}"
+WORK_ROOT="${WORK_ROOT:-${DATA_ROOT}/outputs/borzoi_atac_transfer}"
+LOG_ROOT="${LOG_ROOT:-${DATA_ROOT}/outputs/local_queue_logs}"
 
 BATCH_SIZE="${BATCH_SIZE:-4}"
 EPOCHS_MIN="${EPOCHS_MIN:-10}"
@@ -17,7 +18,7 @@ MIXED_PRECISION="${MIXED_PRECISION:-0}"
 RUN_EVAL="${RUN_EVAL:-1}"
 GPUS=(${GPUS:-0 1})
 
-samples=(K562 GM12878)
+samples=(${SAMPLES:-K562 GM12878})
 modes=(${MODES:-lora})
 
 mkdir -p "${LOG_ROOT}" "${WORK_ROOT}"
@@ -75,6 +76,7 @@ run_task() {
 
   (
     export CUDA_VISIBLE_DEVICES="${gpu}"
+    export DATA_ROOT="${DATA_ROOT}"
     export SAMPLES="${sample}"
     export MODES="${mode}"
     export BORZOI_TRUNKS="${trunk}"
@@ -89,7 +91,7 @@ run_task() {
     export MIXED_PRECISION="${MIXED_PRECISION}"
     export RUN_EVAL="${RUN_EVAL}"
 
-    bash "${RUNNER}"
+    bash "${RUNNER}" "${DATA_ROOT}"
   ) >> "${log_base}.out" 2> "${log_base}.err"
 
   echo "finished=$(date -Is)" >> "${log_base}.out"
