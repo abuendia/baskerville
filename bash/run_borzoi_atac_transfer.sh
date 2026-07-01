@@ -8,7 +8,7 @@ CONDA_SH="${CONDA_SH:-/users/abuen/programs/conda/etc/profile.d/conda.sh}"
 CONDA_ENV="${CONDA_ENV:-baskerville}"
 
 WORK_ROOT="${WORK_ROOT:-${DATA_ROOT}/outputs/borzoi_atac_transfer}"
-FASTA="${FASTA:-${DATA_ROOT}/genome/hg38.genome.fa}"
+FASTA="${FASTA:-/oak/stanford/groups/akundaje/abuen/ag/ag-data/genome/hg38.genome.fa}"
 TRUNK_ROOT="${TRUNK_ROOT:-${DATA_ROOT}/data/borzoi/pretrain_trunks}"
 BORZOI_TRUNKS="${BORZOI_TRUNKS:-}"
 TRUNK_GLOB="${TRUNK_GLOB:-trunk_r*.h5}"
@@ -87,20 +87,6 @@ else
   shopt -s nullglob
   TRUNKS=("${TRUNK_ROOT}"/${TRUNK_GLOB})
   shopt -u nullglob
-fi
-
-if (( ${#TRUNKS[@]} == 0 )); then
-  cat >&2 <<EOF
-No Borzoi trunk weights found.
-
-Set one of:
-  BORZOI_TRUNKS="/path/to/trunk_r0.h5 /path/to/trunk_r1.h5"
-  TRUNK_ROOT=/directory/containing/trunk_r*.h5
-
-The Baskerville transfer tutorial restores trunk weights with:
-  hound_transfer.py --trunk --restore <trunk.h5> ...
-EOF
-  exit 1
 fi
 
 run_hound_data() {
